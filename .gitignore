@@ -1,0 +1,7 @@
+node_modules/
+out/
+__pycache__/
+*.pyc
+.venv/
+backend/data/embeddings/workspace/
+backend/assets/best_model.pt

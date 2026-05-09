@@ -1,0 +1,42 @@
+{
+  "name": "semantic-search-ext",
+  "displayName": "Semantic Search Ext",
+  "description": "VS Code semantic code search with a bundled local backend",
+  "version": "0.0.1",
+  "publisher": "nk-labs314",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "onCommand:semanticSearch.search"
+  ],
+  "main": "./out/extension.js",
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.80.0",
+    "@types/node": "^18.0.0",
+    "typescript": "^5.0.0"
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "semanticSearch.search",
+        "title": "Semantic Code Search"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "semanticSearch.search",
+        "key": "ctrl+shift+k",
+        "mac": "cmd+shift+k"
+      }
+    ]
+  }
+}
