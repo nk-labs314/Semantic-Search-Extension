@@ -136,12 +136,7 @@ Before publishing, check that:
 - The matching GitHub Release contains the runtime ZIP.
 - `package.json` has the correct `publisher`, `repository`, `version`, and extension metadata.
 
-## Research and Model Notes
 
-This extension is part of a larger semantic code search/modeling project. The research and model-building write-up will be linked here:
-
-```text
-Research/model write-up: [ADD LINK HERE]
 ```
 
 ## Roadmap
