@@ -19,12 +19,12 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/nk-labs314/semantic-search-ext"
+    "url": "https://github.com/nk-labs314/Semantic-Search-Extension"
   },
   "bugs": {
-    "url": "https://github.com/nk-labs314/semantic-search-ext/issues"
+    "url": "https://github.com/nk-labs314/Semantic-Search-Extension/issues"
   },
-  "homepage": "https://github.com/nk-labs314/semantic-search-ext",
+  "homepage": "https://github.com/nk-labs314/Semantic-Search-Extension",
   "activationEvents": [
     "onStartupFinished",
     "onCommand:semanticSearch.search"
@@ -36,7 +36,7 @@
     "vscode:prepublish": "npm run compile",
     "package:vsix": "npx @vscode/vsce package",
     "package:pre-release": "npx @vscode/vsce package --pre-release",
-    "runtime:bundle": "backend/.venv/Scripts/python.exe scripts/build_runtime_bundle.py"
+    "runtime:bundle": "backend/.venv-release/Scripts/python.exe scripts/build_windows_standalone_runtime.py --venv backend/.venv-release"
   },
   "devDependencies": {
     "@types/vscode": "^1.80.0",
