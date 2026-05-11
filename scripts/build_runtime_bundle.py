@@ -71,6 +71,45 @@ def copy_backend_tree(staging_root: Path, venv_source: Path) -> None:
         ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
     )
 
+    prune_runtime_tree(backend_target / ".venv")
+
+
+def prune_runtime_tree(venv_root: Path) -> None:
+    removable_dirs = [
+        venv_root / "Lib" / "site-packages" / "pip",
+        venv_root / "Lib" / "site-packages" / "pip-26.1.1.dist-info",
+        venv_root / "Lib" / "site-packages" / "setuptools",
+        venv_root / "Lib" / "site-packages" / "setuptools-70.2.0.dist-info",
+        venv_root / "Lib" / "site-packages" / "wheel",
+        venv_root / "Lib" / "site-packages" / "wheel-0.45.1.dist-info",
+        venv_root / "share",
+    ]
+    for target in removable_dirs:
+        shutil.rmtree(target, ignore_errors=True)
+
+    removable_files = [
+        venv_root / "Scripts" / "pip.exe",
+        venv_root / "Scripts" / "pip3.exe",
+        venv_root / "Scripts" / "pip3.14.exe",
+        venv_root / "Scripts" / "hf.exe",
+        venv_root / "Scripts" / "huggingface-cli.exe",
+        venv_root / "Scripts" / "f2py.exe",
+        venv_root / "Scripts" / "numpy-config.exe",
+        venv_root / "Scripts" / "markdown-it.exe",
+        venv_root / "Scripts" / "pygmentize.exe",
+        venv_root / "Scripts" / "tiny-agents.exe",
+        venv_root / "Scripts" / "transformers.exe",
+        venv_root / "Scripts" / "typer.exe",
+        venv_root / "Scripts" / "tqdm.exe",
+        venv_root / "Scripts" / "fastapi.exe",
+    ]
+    for target in removable_files:
+        target.unlink(missing_ok=True)
+
+    for pattern in ("*.pyc", "*.pyo", "*.lib", "*.exp", "*.pdb"):
+        for file_path in venv_root.rglob(pattern):
+            file_path.unlink(missing_ok=True)
+
 
 def write_manifest(staging_root: Path, version: str, platform_key: str) -> None:
     python_relative_path = (

@@ -385,21 +385,11 @@ function extractArchive(
   ensureDirectory(destination);
 
   if (archivePath.endsWith(".zip")) {
-    if (process.platform !== "win32") {
-      return Promise.reject(new Error("ZIP extraction is only configured for Windows"));
+    if (process.platform === "win32") {
+      return spawnAndWait("tar", ["-xf", archivePath, "-C", destination], destination, output);
     }
 
-    return spawnAndWait(
-      "powershell",
-      [
-        "-NoProfile",
-        "-NonInteractive",
-        "-Command",
-        `Expand-Archive -LiteralPath '${archivePath.replace(/'/g, "''")}' -DestinationPath '${destination.replace(/'/g, "''")}' -Force`,
-      ],
-      destination,
-      output
-    );
+    return Promise.reject(new Error("ZIP extraction is only configured for Windows"));
   }
 
   return spawnAndWait("tar", ["-xzf", archivePath, "-C", destination], destination, output);

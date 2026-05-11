@@ -12,7 +12,7 @@ $pythonExe = Join-Path $RuntimeVenv "Scripts\python.exe"
 $pipExe = Join-Path $RuntimeVenv "Scripts\pip.exe"
 
 Write-Host "Installing base dependencies"
-& $pipExe install --upgrade pip
+& $pythonExe -m pip install --upgrade pip
 & $pipExe install fastapi uvicorn transformers numpy faiss-cpu pydantic
 
 Write-Host "Installing CPU-only PyTorch"
@@ -23,4 +23,3 @@ Write-Host "Staging tokenizer and config assets"
 
 Write-Host "Building runtime bundle"
 & $pythonExe scripts\build_runtime_bundle.py --venv $RuntimeVenv
-
