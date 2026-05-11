@@ -42,20 +42,20 @@ In dev mode, the extension can use `backend/.venv` directly.
 Run this on each platform you want to support:
 
 - Windows x64:
-  - `npm run runtime:bundle`
+  - `powershell -ExecutionPolicy Bypass -File scripts/build_release_runtime.ps1`
 
 This generates an archive like:
 
 - `dist/runtime/semantic-search-runtime-win32-x64.zip`
 
-For macOS and Linux, run `scripts/build_runtime_bundle.py` on those platforms so the archive contains the correct platform runtime.
+For macOS and Linux, run the platform-specific runtime builder on those platforms so the archive contains the correct platform runtime.
 
 Important:
 
 - Do not build production runtime bundles from a GPU-heavy dev venv if you can avoid it.
 - The archive built from your current local Windows venv is roughly 3.06 GB because it includes large CUDA/PyTorch binaries.
-- For release builds, create a clean CPU-only runtime venv and pass it to the bundler:
-  - `backend/.venv/Scripts/python.exe scripts/build_runtime_bundle.py --venv path\\to\\cpu-only-venv`
+- For release builds, create a clean CPU-only dependency environment and package it with the Windows embeddable Python distribution:
+  - `backend/.venv/Scripts/python.exe scripts/build_windows_standalone_runtime.py --venv path\\to\\cpu-only-venv`
 - On Windows, there is a helper script for that flow:
   - `powershell -ExecutionPolicy Bypass -File scripts/build_release_runtime.ps1`
 

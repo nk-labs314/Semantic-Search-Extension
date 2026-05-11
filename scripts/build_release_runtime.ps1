@@ -22,4 +22,4 @@ Write-Host "Staging tokenizer and config assets"
 & $pythonExe scripts\stage_model_assets.py
 
 Write-Host "Building runtime bundle"
-& $pythonExe scripts\build_runtime_bundle.py --venv $RuntimeVenv
+& $pythonExe scripts\build_windows_standalone_runtime.py --venv $RuntimeVenv

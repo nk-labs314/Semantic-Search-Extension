@@ -2,6 +2,8 @@ src/**
 scripts/**
 tsconfig.json
 .staging/**
+.cache/**
+.tmp/**
 dist/runtime/**
 node_modules/**
 backend/.venv/**

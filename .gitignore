@@ -6,6 +6,7 @@ __pycache__/
 backend/.venv/
 backend/.venv-release/
 .tmp/
+.cache/
 dist/runtime/
 backend/data/embeddings/workspace/
 backend/assets/best_model.pt
