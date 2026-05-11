@@ -7,8 +7,10 @@ tsconfig.json
 dist/runtime/**
 node_modules/**
 backend/.venv/**
+backend/.venv-release/**
 backend/assets/best_model.pt
 backend/assets/codebert-base/**
 backend/data/**
 **/__pycache__/**
 **/*.pyc
+*.vsix

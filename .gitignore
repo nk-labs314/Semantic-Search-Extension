@@ -10,3 +10,4 @@ backend/.venv-release/
 dist/runtime/
 backend/data/embeddings/workspace/
 backend/assets/best_model.pt
+semantic-search-ext-0.0.1.vsix
