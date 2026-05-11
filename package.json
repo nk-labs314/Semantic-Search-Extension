@@ -1,15 +1,30 @@
 {
   "name": "semantic-search-ext",
   "displayName": "Semantic Search Ext",
-  "description": "VS Code semantic code search with a bundled local backend",
+  "description": "Semantic code search for VS Code with an auto-installed local runtime",
   "version": "0.0.1",
   "publisher": "nk-labs314",
+  "license": "SEE LICENSE IN LICENSE.txt",
   "engines": {
     "vscode": "^1.80.0"
   },
   "categories": [
     "Other"
   ],
+  "keywords": [
+    "semantic-search",
+    "code-search",
+    "python",
+    "ai"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nk-labs314/semantic-search-ext"
+  },
+  "bugs": {
+    "url": "https://github.com/nk-labs314/semantic-search-ext/issues"
+  },
+  "homepage": "https://github.com/nk-labs314/semantic-search-ext",
   "activationEvents": [
     "onStartupFinished",
     "onCommand:semanticSearch.search"
@@ -17,7 +32,11 @@
   "main": "./out/extension.js",
   "scripts": {
     "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./"
+    "watch": "tsc -watch -p ./",
+    "vscode:prepublish": "npm run compile",
+    "package:vsix": "npx @vscode/vsce package",
+    "package:pre-release": "npx @vscode/vsce package --pre-release",
+    "runtime:bundle": "backend/.venv/Scripts/python.exe scripts/build_runtime_bundle.py"
   },
   "devDependencies": {
     "@types/vscode": "^1.80.0",
@@ -29,6 +48,18 @@
       {
         "command": "semanticSearch.search",
         "title": "Semantic Code Search"
+      },
+      {
+        "command": "semanticSearch.installRuntime",
+        "title": "Semantic Search: Install Runtime"
+      },
+      {
+        "command": "semanticSearch.reinstallRuntime",
+        "title": "Semantic Search: Reinstall Runtime"
+      },
+      {
+        "command": "semanticSearch.showBackendLogs",
+        "title": "Semantic Search: Show Backend Logs"
       }
     ],
     "keybindings": [
@@ -37,6 +68,31 @@
         "key": "ctrl+shift+k",
         "mac": "cmd+shift+k"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "Semantic Search Ext",
+      "properties": {
+        "semanticSearch.runtimeBaseUrl": {
+          "type": "string",
+          "default": "",
+          "description": "Base URL that hosts runtime archives named like semantic-search-runtime-win32-x64.zip. If empty, the extension derives a GitHub Releases URL from package.json.repository."
+        },
+        "semanticSearch.runtimeVersion": {
+          "type": "string",
+          "default": "",
+          "description": "Runtime version tag to download. Leave empty to use the extension version."
+        },
+        "semanticSearch.autoInstallRuntime": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically download the runtime on first activation when it is missing."
+        },
+        "semanticSearch.autoIndexOnStartup": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically start the backend and index the active workspace on startup."
+        }
+      }
+    }
   }
 }

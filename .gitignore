@@ -3,5 +3,9 @@ out/
 __pycache__/
 *.pyc
 .venv/
+backend/.venv/
+backend/.venv-release/
+.tmp/
+dist/runtime/
 backend/data/embeddings/workspace/
 backend/assets/best_model.pt

@@ -11,14 +11,14 @@ from typing import Any
 import faiss
 import numpy as np
 import torch
-from transformers import AutoModel, AutoTokenizer
+from transformers import AutoConfig, AutoModel, AutoTokenizer
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 OUTPUT_DIR = BACKEND_ROOT / "data" / "embeddings" / "workspace"
 INDEX_PATH = OUTPUT_DIR / "index.faiss"
 METADATA_PATH = OUTPUT_DIR / "metadata.json"
 MODEL_PATH = BACKEND_ROOT / "assets" / "best_model.pt"
-MODEL_NAME = "microsoft/codebert-base"
+MODEL_ASSET_DIR = BACKEND_ROOT / "assets" / "codebert-base"
 BATCH_SIZE = 16
 CODEBERT_DIM = 768
 SKIP_DIRS = {
@@ -109,10 +109,13 @@ def get_model_bundle() -> tuple[Any, Any, str]:
 
     if not MODEL_PATH.exists():
         raise FileNotFoundError(f"Missing model weights: {MODEL_PATH}")
+    if not MODEL_ASSET_DIR.exists():
+        raise FileNotFoundError(f"Missing local model assets: {MODEL_ASSET_DIR}")
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-    model = AutoModel.from_pretrained(MODEL_NAME, use_safetensors=True)
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_ASSET_DIR, local_files_only=True)
+    config = AutoConfig.from_pretrained(MODEL_ASSET_DIR, local_files_only=True)
+    model = AutoModel.from_config(config)
     model.load_state_dict(torch.load(MODEL_PATH, map_location=device))
     model.to(device)
     model.eval()

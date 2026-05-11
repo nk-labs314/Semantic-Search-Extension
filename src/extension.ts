@@ -1,17 +1,21 @@
-import * as vscode from "vscode";
-import * as http from "http";
 import * as fs from "fs";
+import * as http from "http";
+import * as https from "https";
 import * as path from "path";
-import { spawn, ChildProcess } from "child_process";
+import { ChildProcess, spawn } from "child_process";
+import * as vscode from "vscode";
 
 const BACKEND_HOST = "127.0.0.1";
 const BACKEND_PORT = 8000;
+const CONFIG_SECTION = "semanticSearch";
 const LOG_PREFIX = "[SemanticSearch]";
 const DEBOUNCE_MS = 300;
 const BACKEND_READY_TIMEOUT_MS = 20000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 2000;
 const WORKSPACE_INDEX_TIMEOUT_MS = 120000;
 const FILE_INDEX_TIMEOUT_MS = 30000;
+const RUNTIME_DOWNLOAD_TIMEOUT_MS = 15 * 60 * 1000;
+const RUNTIME_ARCHIVE_PREFIX = "semantic-search-runtime";
 
 let isIndexed = false;
 let isIndexing = false;
@@ -49,6 +53,14 @@ interface IndexResponse {
 
 interface HealthResponse {
   status: string;
+  workspace_indexed?: boolean;
+  app_root?: string;
+}
+
+interface RuntimeManifest {
+  version: string;
+  platform: string;
+  pythonRelativePath?: string;
 }
 
 interface ResultQuickPickItem extends vscode.QuickPickItem {
@@ -70,30 +82,165 @@ function getBackendOutput(): vscode.OutputChannel {
   return backendOutput;
 }
 
+function getConfig(): vscode.WorkspaceConfiguration {
+  return vscode.workspace.getConfiguration(CONFIG_SECTION);
+}
+
 function getExtensionRoot(context: vscode.ExtensionContext): string {
   return context.extensionUri.fsPath;
 }
 
-function resolvePythonCommand(extensionRoot: string): string {
-  const bundledPython =
-    process.platform === "win32"
-      ? path.join(extensionRoot, "backend", ".venv", "Scripts", "python.exe")
-      : path.join(extensionRoot, "backend", ".venv", "bin", "python");
-
-  if (fs.existsSync(bundledPython)) {
-    return bundledPython;
-  }
-
-  return process.platform === "win32" ? "python" : "python3";
+function ensureDirectory(dirPath: string): void {
+  fs.mkdirSync(dirPath, { recursive: true });
 }
 
-function buildPythonEnv(extensionRoot: string): NodeJS.ProcessEnv {
+function fileExists(filePath: string): boolean {
+  try {
+    return fs.existsSync(filePath);
+  } catch {
+    return false;
+  }
+}
+
+function safeRm(targetPath: string): void {
+  try {
+    fs.rmSync(targetPath, { recursive: true, force: true });
+  } catch {
+    // ignore cleanup failures
+  }
+}
+
+function getPackageVersion(context: vscode.ExtensionContext): string {
+  return String(context.extension.packageJSON.version ?? "0.0.1");
+}
+
+function getRuntimeVersion(context: vscode.ExtensionContext): string {
+  const configured = getConfig().get<string>("runtimeVersion", "").trim();
+  return configured || getPackageVersion(context);
+}
+
+function getPlatformKey(): string | undefined {
+  const platform = process.platform;
+  const arch = process.arch;
+  const supported = new Set([
+    "win32-x64",
+    "win32-arm64",
+    "darwin-x64",
+    "darwin-arm64",
+    "linux-x64",
+    "linux-arm64",
+  ]);
+  const key = `${platform}-${arch}`;
+  return supported.has(key) ? key : undefined;
+}
+
+function getArchiveExtension(platformKey: string): "zip" | "tar.gz" {
+  return platformKey.startsWith("win32-") ? "zip" : "tar.gz";
+}
+
+function getArtifactFileName(platformKey: string): string {
+  return `${RUNTIME_ARCHIVE_PREFIX}-${platformKey}.${getArchiveExtension(platformKey)}`;
+}
+
+function normalizeGitHubUrl(url: string): string {
+  return url.replace(/^git\+/, "").replace(/\.git$/, "");
+}
+
+function deriveRuntimeBaseUrl(context: vscode.ExtensionContext): string | undefined {
+  const configured = getConfig().get<string>("runtimeBaseUrl", "").trim();
+  if (configured) {
+    return configured.replace(/\/+$/, "");
+  }
+
+  const repository = context.extension.packageJSON.repository;
+  const rawUrl =
+    typeof repository === "string"
+      ? repository
+      : typeof repository?.url === "string"
+        ? repository.url
+        : "";
+  const normalized = normalizeGitHubUrl(rawUrl);
+  const match = normalized.match(/github\.com[/:]([^/]+)\/([^/]+)$/i);
+  if (!match) {
+    return undefined;
+  }
+
+  const owner = match[1];
+  const repo = match[2];
+  return `https://github.com/${owner}/${repo}/releases/download/v${getRuntimeVersion(context)}`;
+}
+
+function getManagedRuntimeRoot(context: vscode.ExtensionContext): string | undefined {
+  const platformKey = getPlatformKey();
+  if (!platformKey) {
+    return undefined;
+  }
+
+  return path.join(
+    context.globalStorageUri.fsPath,
+    "runtime",
+    getRuntimeVersion(context),
+    platformKey
+  );
+}
+
+function getRuntimeManifestPath(runtimeRoot: string): string {
+  return path.join(runtimeRoot, "runtime-manifest.json");
+}
+
+function readRuntimeManifest(runtimeRoot: string): RuntimeManifest | undefined {
+  const manifestPath = getRuntimeManifestPath(runtimeRoot);
+  if (!fileExists(manifestPath)) {
+    return undefined;
+  }
+
+  try {
+    return JSON.parse(fs.readFileSync(manifestPath, "utf8")) as RuntimeManifest;
+  } catch {
+    return undefined;
+  }
+}
+
+function isManagedRuntimeInstalled(context: vscode.ExtensionContext): boolean {
+  const runtimeRoot = getManagedRuntimeRoot(context);
+  const platformKey = getPlatformKey();
+  if (!runtimeRoot || !platformKey) {
+    return false;
+  }
+
+  const manifest = readRuntimeManifest(runtimeRoot);
+  if (!manifest) {
+    return false;
+  }
+
+  return (
+    manifest.version === getRuntimeVersion(context) && manifest.platform === platformKey
+  );
+}
+
+function getPythonPathForAppRoot(appRoot: string, manifest?: RuntimeManifest): string {
+  if (manifest?.pythonRelativePath) {
+    return path.join(appRoot, manifest.pythonRelativePath);
+  }
+
+  return process.platform === "win32"
+    ? path.join(appRoot, "backend", ".venv", "Scripts", "python.exe")
+    : path.join(appRoot, "backend", ".venv", "bin", "python");
+}
+
+function localDevBundleAvailable(extensionRoot: string): boolean {
+  const modelPath = path.join(extensionRoot, "backend", "assets", "best_model.pt");
+  const tokenizerDir = path.join(extensionRoot, "backend", "assets", "codebert-base");
+  const pythonPath = getPythonPathForAppRoot(extensionRoot);
+  return fileExists(modelPath) && fileExists(tokenizerDir) && fileExists(pythonPath);
+}
+
+function buildPythonEnv(appRoot: string): NodeJS.ProcessEnv {
   const pythonPath = process.env.PYTHONPATH;
   return {
     ...process.env,
-    PYTHONPATH: pythonPath
-      ? `${extensionRoot}${path.delimiter}${pythonPath}`
-      : extensionRoot,
+    PYTHONPATH: pythonPath ? `${appRoot}${path.delimiter}${pythonPath}` : appRoot,
+    PYTHONDONTWRITEBYTECODE: "1",
   };
 }
 
@@ -204,7 +351,221 @@ async function waitForBackendReady(maxWaitMs: number): Promise<boolean> {
   return false;
 }
 
-async function ensureBackendRunning(context: vscode.ExtensionContext): Promise<boolean> {
+function spawnAndWait(
+  command: string,
+  args: string[],
+  cwd: string,
+  output: vscode.OutputChannel
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd,
+      windowsHide: true,
+      shell: false,
+    });
+
+    child.stdout?.on("data", (chunk: Buffer) => output.append(chunk.toString()));
+    child.stderr?.on("data", (chunk: Buffer) => output.append(chunk.toString()));
+    child.on("error", reject);
+    child.on("exit", (code) => {
+      if (code === 0) {
+        resolve();
+      } else {
+        reject(new Error(`${command} exited with code ${code ?? "null"}`));
+      }
+    });
+  });
+}
+
+function extractArchive(
+  archivePath: string,
+  destination: string,
+  output: vscode.OutputChannel
+): Promise<void> {
+  ensureDirectory(destination);
+
+  if (archivePath.endsWith(".zip")) {
+    if (process.platform !== "win32") {
+      return Promise.reject(new Error("ZIP extraction is only configured for Windows"));
+    }
+
+    return spawnAndWait(
+      "powershell",
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        `Expand-Archive -LiteralPath '${archivePath.replace(/'/g, "''")}' -DestinationPath '${destination.replace(/'/g, "''")}' -Force`,
+      ],
+      destination,
+      output
+    );
+  }
+
+  return spawnAndWait("tar", ["-xzf", archivePath, "-C", destination], destination, output);
+}
+
+function downloadFile(
+  url: string,
+  destination: string,
+  progress: vscode.Progress<{ message?: string; increment?: number }>
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let redirectsRemaining = 5;
+
+    const requestUrl = (currentUrl: string): void => {
+      const client = currentUrl.startsWith("https:") ? https : http;
+      const request = client.get(currentUrl, (response) => {
+        const status = response.statusCode ?? 0;
+        const location = response.headers.location;
+
+        if ([301, 302, 303, 307, 308].includes(status) && location && redirectsRemaining > 0) {
+          redirectsRemaining -= 1;
+          response.resume();
+          requestUrl(new URL(location, currentUrl).toString());
+          return;
+        }
+
+        if (status < 200 || status >= 300) {
+          response.resume();
+          reject(new Error(`Runtime download failed with HTTP ${status}`));
+          return;
+        }
+
+        const totalBytes = Number(response.headers["content-length"] ?? 0);
+        let downloaded = 0;
+        const file = fs.createWriteStream(destination);
+
+        response.on("data", (chunk: Buffer) => {
+          downloaded += chunk.length;
+          if (totalBytes > 0) {
+            const percent = Math.max(1, Math.min(95, Math.floor((downloaded / totalBytes) * 95)));
+            progress.report({ increment: percent / 10, message: `Downloading runtime ${percent}%` });
+          } else {
+            progress.report({ message: `Downloading runtime (${Math.floor(downloaded / 1024 / 1024)} MB)` });
+          }
+        });
+
+        response.pipe(file);
+        file.on("finish", () => {
+          file.close();
+          resolve();
+        });
+        file.on("error", (err) => {
+          file.close();
+          reject(err);
+        });
+      });
+
+      request.setTimeout(RUNTIME_DOWNLOAD_TIMEOUT_MS, () => {
+        request.destroy(new Error("Runtime download timed out"));
+      });
+      request.on("error", reject);
+    };
+
+    requestUrl(url);
+  });
+}
+
+async function installManagedRuntime(
+  context: vscode.ExtensionContext,
+  forceReinstall: boolean
+): Promise<string | undefined> {
+  const platformKey = getPlatformKey();
+  if (!platformKey) {
+    vscode.window.showErrorMessage(
+      `Semantic Search does not yet support platform ${process.platform}-${process.arch}.`
+    );
+    return undefined;
+  }
+
+  const baseUrl = deriveRuntimeBaseUrl(context);
+  if (!baseUrl) {
+    vscode.window.showErrorMessage(
+      "Runtime download URL is not configured. Set semanticSearch.runtimeBaseUrl before publishing."
+    );
+    return undefined;
+  }
+
+  const runtimeRoot = getManagedRuntimeRoot(context);
+  if (!runtimeRoot) {
+    return undefined;
+  }
+
+  if (!forceReinstall && isManagedRuntimeInstalled(context)) {
+    return runtimeRoot;
+  }
+
+  const output = getBackendOutput();
+  const archiveName = getArtifactFileName(platformKey);
+  const downloadUrl = `${baseUrl}/${archiveName}`;
+  const downloadsDir = path.join(context.globalStorageUri.fsPath, "downloads");
+  const tempDir = path.join(context.globalStorageUri.fsPath, "tmp");
+  ensureDirectory(context.globalStorageUri.fsPath);
+  ensureDirectory(downloadsDir);
+  ensureDirectory(tempDir);
+
+  const archivePath = path.join(downloadsDir, archiveName);
+  const extractDir = path.join(tempDir, `runtime-${Date.now()}`);
+
+  output.appendLine(`${LOG_PREFIX} Installing runtime from ${downloadUrl}`);
+
+  const installedRoot = await vscode.window.withProgress(
+    {
+      location: vscode.ProgressLocation.Notification,
+      title: forceReinstall ? "Semantic Search: Reinstalling runtime..." : "Semantic Search: Installing runtime...",
+      cancellable: false,
+    },
+    async (progress) => {
+      safeRm(archivePath);
+      safeRm(extractDir);
+      safeRm(runtimeRoot);
+
+      await downloadFile(downloadUrl, archivePath, progress);
+      progress.report({ message: "Extracting runtime..." });
+      await extractArchive(archivePath, extractDir, output);
+
+      const manifestPath = getRuntimeManifestPath(extractDir);
+      if (!fileExists(manifestPath)) {
+        throw new Error("Downloaded runtime archive is missing runtime-manifest.json");
+      }
+
+      ensureDirectory(path.dirname(runtimeRoot));
+      fs.renameSync(extractDir, runtimeRoot);
+      safeRm(archivePath);
+      return runtimeRoot;
+    }
+  );
+
+  return installedRoot;
+}
+
+async function resolveBackendAppRoot(
+  context: vscode.ExtensionContext,
+  forceRuntimeInstall: boolean
+): Promise<string | undefined> {
+  const extensionRoot = getExtensionRoot(context);
+
+  if (!forceRuntimeInstall && isManagedRuntimeInstalled(context)) {
+    return getManagedRuntimeRoot(context);
+  }
+
+  if (!forceRuntimeInstall && localDevBundleAvailable(extensionRoot)) {
+    return extensionRoot;
+  }
+
+  const autoInstall = getConfig().get<boolean>("autoInstallRuntime", true);
+  if (!autoInstall && !forceRuntimeInstall) {
+    return undefined;
+  }
+
+  return installManagedRuntime(context, forceRuntimeInstall);
+}
+
+async function ensureBackendRunning(
+  context: vscode.ExtensionContext,
+  forceRuntimeInstall: boolean = false
+): Promise<boolean> {
   if (await isBackendHealthy()) {
     return true;
   }
@@ -220,18 +581,29 @@ async function ensureBackendRunning(context: vscode.ExtensionContext): Promise<b
       cancellable: false,
     },
     async () => {
-      const extensionRoot = getExtensionRoot(context);
-      const pythonCommand = resolvePythonCommand(extensionRoot);
+      const appRoot = await resolveBackendAppRoot(context, forceRuntimeInstall);
       const output = getBackendOutput();
+
+      if (!appRoot) {
+        vscode.window.showErrorMessage(
+          "Semantic Search runtime is not installed. Run 'Semantic Search: Install Runtime'."
+        );
+        return false;
+      }
+
+      const manifest = readRuntimeManifest(appRoot);
+      const pythonCommand = getPythonPathForAppRoot(appRoot, manifest);
+      if (!fileExists(pythonCommand)) {
+        vscode.window.showErrorMessage(`Missing Python runtime: ${pythonCommand}`);
+        return false;
+      }
 
       try {
         if (await isBackendHealthy()) {
           return true;
         }
 
-        output.appendLine(
-          `${LOG_PREFIX} Spawning backend from ${extensionRoot} with ${pythonCommand}`
-        );
+        output.appendLine(`${LOG_PREFIX} Spawning backend from ${appRoot} with ${pythonCommand}`);
 
         backendProcess = spawn(
           pythonCommand,
@@ -244,11 +616,11 @@ async function ensureBackendRunning(context: vscode.ExtensionContext): Promise<b
             "--port",
             String(BACKEND_PORT),
             "--app-dir",
-            extensionRoot,
+            appRoot,
           ],
           {
-            cwd: extensionRoot,
-            env: buildPythonEnv(extensionRoot),
+            cwd: appRoot,
+            env: buildPythonEnv(appRoot),
             windowsHide: true,
           }
         );
@@ -310,9 +682,13 @@ async function ensureIndexed(workspaceRoot: string): Promise<boolean> {
         cancellable: false,
       },
       async () =>
-        postJSON<IndexResponse>("/index/workspace", {
-          root_path: workspaceRoot,
-        }, WORKSPACE_INDEX_TIMEOUT_MS)
+        postJSON<IndexResponse>(
+          "/index/workspace",
+          {
+            root_path: workspaceRoot,
+          },
+          WORKSPACE_INDEX_TIMEOUT_MS
+        )
     );
 
     if (result.status === "error") {
@@ -447,10 +823,14 @@ function setupFileWatcher(context: vscode.ExtensionContext, workspaceRoot: strin
       filePath,
       setTimeout(() => {
         debounceTimers.delete(filePath);
-        postJSON("/index/file", {
-          file_path: filePath,
-          root_path: workspaceRoot,
-        }, FILE_INDEX_TIMEOUT_MS).catch((err) => {
+        postJSON(
+          "/index/file",
+          {
+            file_path: filePath,
+            root_path: workspaceRoot,
+          },
+          FILE_INDEX_TIMEOUT_MS
+        ).catch((err) => {
           logError(`Incremental index failed for ${filePath}`, err);
         });
       }, DEBOUNCE_MS)
@@ -469,10 +849,14 @@ function setupFileWatcher(context: vscode.ExtensionContext, workspaceRoot: strin
       debounceTimers.delete(filePath);
     }
 
-    deleteJSON("/index/file", {
-      file_path: filePath,
-      root_path: workspaceRoot,
-    }, FILE_INDEX_TIMEOUT_MS).catch((err) => {
+    deleteJSON(
+      "/index/file",
+      {
+        file_path: filePath,
+        root_path: workspaceRoot,
+      },
+      FILE_INDEX_TIMEOUT_MS
+    ).catch((err) => {
       logError(`Delete index failed for ${filePath}`, err);
     });
   };
@@ -483,6 +867,20 @@ function setupFileWatcher(context: vscode.ExtensionContext, workspaceRoot: strin
   context.subscriptions.push(watcher);
 }
 
+async function installRuntimeCommand(
+  context: vscode.ExtensionContext,
+  forceReinstall: boolean
+): Promise<void> {
+  const root = await installManagedRuntime(context, forceReinstall);
+  if (root) {
+    vscode.window.showInformationMessage(
+      forceReinstall
+        ? "Semantic Search runtime reinstalled."
+        : "Semantic Search runtime installed."
+    );
+  }
+}
+
 export function activate(context: vscode.ExtensionContext): void {
   log("Extension activated");
 
@@ -490,11 +888,24 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.commands.registerCommand("semanticSearch.search", async () => {
       await handleSearch(context);
+    }),
+    vscode.commands.registerCommand("semanticSearch.installRuntime", async () => {
+      await installRuntimeCommand(context, false);
+    }),
+    vscode.commands.registerCommand("semanticSearch.reinstallRuntime", async () => {
+      await installRuntimeCommand(context, true);
+    }),
+    vscode.commands.registerCommand("semanticSearch.showBackendLogs", async () => {
+      getBackendOutput().show(true);
     })
   );
 
   const folders = vscode.workspace.workspaceFolders;
   if (!folders || folders.length === 0) {
+    return;
+  }
+
+  if (!getConfig().get<boolean>("autoIndexOnStartup", true)) {
     return;
   }
 

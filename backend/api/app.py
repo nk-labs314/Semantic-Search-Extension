@@ -10,7 +10,7 @@ import torch
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from transformers import AutoModel, AutoTokenizer
+from transformers import AutoConfig, AutoModel, AutoTokenizer
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -18,9 +18,9 @@ logging.basicConfig(level=logging.INFO)
 APP_ROOT = Path(__file__).resolve().parents[2]
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 MODEL_PATH = BACKEND_ROOT / "assets" / "best_model.pt"
+MODEL_ASSET_DIR = BACKEND_ROOT / "assets" / "codebert-base"
 INDEX_PATH = BACKEND_ROOT / "data" / "embeddings" / "workspace" / "index.faiss"
 METADATA_PATH = BACKEND_ROOT / "data" / "embeddings" / "workspace" / "metadata.json"
-MODEL_NAME = "microsoft/codebert-base"
 SEARCH_LIMIT = 5
 TOP_1_THRESHOLD = 0.85
 TOP_3_THRESHOLD = 0.35
@@ -68,10 +68,13 @@ def get_model_bundle() -> tuple[Any, Any, str]:
 
     if not MODEL_PATH.exists():
         raise FileNotFoundError(f"Missing model weights: {MODEL_PATH}")
+    if not MODEL_ASSET_DIR.exists():
+        raise FileNotFoundError(f"Missing local model assets: {MODEL_ASSET_DIR}")
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-    model = AutoModel.from_pretrained(MODEL_NAME, use_safetensors=True)
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_ASSET_DIR, local_files_only=True)
+    config = AutoConfig.from_pretrained(MODEL_ASSET_DIR, local_files_only=True)
+    model = AutoModel.from_config(config)
     model.load_state_dict(torch.load(MODEL_PATH, map_location=device))
     model.to(device)
     model.eval()

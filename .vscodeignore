@@ -1,0 +1,12 @@
+src/**
+scripts/**
+tsconfig.json
+.staging/**
+dist/runtime/**
+node_modules/**
+backend/.venv/**
+backend/assets/best_model.pt
+backend/assets/codebert-base/**
+backend/data/**
+**/__pycache__/**
+**/*.pyc
