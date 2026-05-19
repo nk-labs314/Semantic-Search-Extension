@@ -1,151 +1,159 @@
 # Semantic Search Ext
 
-Semantic Search Ext is a VS Code extension for finding relevant code by meaning instead of exact keywords.
+Semantic Search Ext is a VS Code extension for semantic code search. It lets you search a workspace by intent instead of only by exact text matches.
 
-The extension runs a local Python backend, indexes the open workspace, and lets you search with natural language from inside VS Code. It is built around a CodeBERT-style embedding pipeline with FAISS for fast local retrieval.
+## What Changed
 
-## What It Does
+This project no longer relies on your local repo checkout or your system Python to work.
 
-- Searches code by intent, not only by matching text.
-- Starts a local backend automatically when the extension activates.
-- Downloads a platform runtime on first use instead of asking users to run `uvicorn` manually.
-- Indexes the active workspace and returns matching functions with file and line context.
-- Keeps search local to the user's machine.
+The VS Code extension is the lightweight package published to the Marketplace. The Python backend runtime is built separately as a platform-specific archive and downloaded on first run. The backend model config and tokenizer are vendored locally under `backend/assets/codebert-base`.
 
-## Why This Exists
-
-Regular text search is useful when you already know the exact symbol, file, or phrase you are looking for. It is weaker when you remember what a piece of code does but not what it is called.
-
-This project explores that gap. The goal is to make code search feel closer to asking:
-
-> Where is the function that validates user input before saving?
-
-instead of guessing terms like `validate`, `sanitize`, `save`, or `schema`.
-
-## Current Status
-
-This is an early Windows-focused release.
-
-The extension is publishable through the VS Code Marketplace and uses a separate GitHub Release asset for the backend runtime. That keeps the VSIX small while still allowing the backend to run without manual setup.
-
-Current limitations:
-
-- Windows x64 is the primary supported runtime target.
-- Search quality depends on the bundled model weights and the indexed code structure.
-- Large workspaces may take time to index on first run.
-- The current backend is local-first and not designed as a remote multi-user service.
-
-## Architecture
-
-The project has two main parts:
-
-- `src/`: VS Code extension code. It handles activation, commands, runtime installation, backend startup, and search UI.
-- `backend/`: FastAPI backend. It loads the model, builds workspace embeddings, stores a FAISS index, and serves search results.
-
-At runtime:
-
-1. The extension activates in VS Code.
-2. It checks whether the backend runtime is already installed.
-3. If missing, it downloads the runtime archive from the matching GitHub Release.
-4. It starts the backend locally.
-5. It indexes the current workspace.
-6. `Ctrl+Shift+K` opens semantic search.
+That is the practical way to make this installable from the Marketplace without shipping the whole development environment inside the VSIX.
 
 ## Repository Layout
 
 ```text
-src/                         VS Code extension source
+src/                         Extension source
 out/                         Compiled extension output
-backend/                     Backend API, indexing code, and model assets
-backend/assets/codebert-base Local tokenizer/config assets
-scripts/                     Runtime packaging helpers
+backend/                     Backend source, local dev runtime, and model assets
+scripts/                     Packaging helpers for runtime bundles
 dist/runtime/                Generated runtime archives, ignored by git
 ```
 
 ## Local Development
 
-From the project root:
-
-```powershell
-npm install
-npm run compile
-```
-
-Create a backend virtual environment:
+Create or refresh the backend virtual environment:
 
 ```powershell
 python -m venv backend/.venv
+```
+
+Install backend dependencies:
+
+```powershell
 backend/.venv/Scripts/pip install -r requirements.txt
 ```
 
-If model assets need to be staged:
+Stage tokenizer/config assets if needed:
 
 ```powershell
 backend/.venv/Scripts/python.exe scripts/stage_model_assets.py
 ```
 
-Then open the extension project in VS Code and press `F5` to launch an Extension Development Host.
+Install extension dependencies:
 
-## Runtime Packaging
+```powershell
+npm install
+```
 
-Marketplace users should not need to clone the repo, create a virtual environment, or start the backend themselves. For that reason, the extension package and backend runtime are shipped separately:
+Compile:
 
-- The VSIX contains the extension code and lightweight backend source.
-- The runtime ZIP contains the standalone Python runtime and backend dependencies.
-- The extension downloads the runtime ZIP on first use.
+```powershell
+npm run compile
+```
 
-Build the Windows runtime bundle with:
+Run with `F5` in VS Code. In dev mode, the extension can use `backend/.venv` directly.
+
+## Publish Flow
+
+### 1. Build the runtime bundle on each target platform
+
+Run the runtime builder on each platform you want to support.
+
+Windows x64:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/build_release_runtime.ps1
 ```
 
-This creates:
+This generates an archive like:
 
 ```text
 dist/runtime/semantic-search-runtime-win32-x64.zip
 ```
 
-Upload that ZIP to the GitHub Release matching the extension version, for example:
+For macOS and Linux, run the platform-specific runtime builder on those platforms so the archive contains the correct platform runtime.
+
+Important:
+
+- Do not build production runtime bundles from a GPU-heavy dev environment if you can avoid it.
+- The archive built from a CUDA/PyTorch dev environment can be several gigabytes.
+- For release builds, create a clean CPU-only dependency environment and package it with the Windows embeddable Python distribution.
+
+Example:
+
+```powershell
+backend/.venv/Scripts/python.exe scripts/build_windows_standalone_runtime.py --venv path\to\cpu-only-venv
+```
+
+On Windows, the helper script wraps that flow:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/build_release_runtime.ps1
+```
+
+### 2. Upload runtime bundles to a GitHub Release
+
+Create a GitHub release tag that matches the extension version:
 
 ```text
 v0.0.1
 ```
 
-The expected release asset name is:
+Upload the platform archives to that release, for example:
 
 ```text
 semantic-search-runtime-win32-x64.zip
+semantic-search-runtime-darwin-arm64.tar.gz
+semantic-search-runtime-linux-x64.tar.gz
 ```
 
-## Publishing
+The extension derives the runtime download URL from `package.json.repository` by default:
 
-Package the extension:
+```text
+https://github.com/<owner>/<repo>/releases/download/v<extension-version>
+```
+
+You can override this with the `semanticSearch.runtimeBaseUrl` setting.
+
+### 3. Package and publish the extension
+
+Official VS Code docs for packaging and publishing:
+
+[Publishing Extensions](https://code.visualstudio.com/api/working-with-extensions/publishing-extension)
+
+Package the VSIX:
 
 ```powershell
 npm run package:vsix
 ```
 
-The generated `.vsix` can be uploaded through the Visual Studio Marketplace publisher dashboard or published with `vsce`.
+Publish with `vsce`:
 
-Before publishing, check that:
-
-- `backend/.venv-release/` is excluded by `.vscodeignore`.
-- `*.vsix` is ignored and not committed.
-- `dist/runtime/` is ignored and not committed.
-- The matching GitHub Release contains the runtime ZIP.
-- `package.json` has the correct `publisher`, `repository`, `version`, and extension metadata.
-
-
+```powershell
+npx @vscode/vsce publish
 ```
 
-## Roadmap
+You will need:
 
-- Improve first-run indexing feedback.
-- Add better handling for large repositories.
-- Package macOS and Linux runtime bundles.
-- Improve Marketplace listing assets and screenshots.
-- Add more precise search result ranking and filtering.
+- A VS Code Marketplace publisher.
+- An Azure DevOps Personal Access Token for `vsce publish`.
+
+## First-Run User Experience
+
+After a user installs the extension from the Marketplace:
+
+1. The extension activates.
+2. If the runtime is missing, it downloads the correct platform archive into VS Code global storage.
+3. It starts the backend locally.
+4. It indexes the open workspace.
+5. `Ctrl+Shift+K` runs semantic search.
+
+## Reality Check
+
+"Works on any machine" still means you must produce and upload one runtime bundle per platform you claim to support.
+
+Right now this repo is ready for that release model, but it does not magically create macOS or Linux runtimes from Windows. You still need platform builds for those targets.
 
 ## License
 

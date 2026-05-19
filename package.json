@@ -1,7 +1,7 @@
 {
   "name": "semantic-search-ext",
   "displayName": "Semantic Search Ext",
-  "description": "Semantic code search for VS Code with an auto-installed local runtime",
+  "description": "Local semantic code search for VS Code with a downloadable Python runtime",
   "version": "0.0.1",
   "publisher": "nk-labs314",
   "license": "SEE LICENSE IN LICENSE.txt",
