@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
+from threading import Lock
 from typing import Any
 
 import faiss
@@ -35,8 +36,8 @@ app.add_middleware(
 )
 
 _model_cache: dict[str, Any] = {}
-WORKSPACE_INDEX = None
-WORKSPACE_META: list[dict[str, Any]] | None = None
+_workspace_snapshot: tuple[Any | None, list[dict[str, Any]] | None] = (None, None)
+_index_update_lock = Lock()
 
 
 class QueryRequest(BaseModel):
@@ -102,8 +103,8 @@ def load_workspace_index() -> tuple[Any | None, list[dict[str, Any]] | None]:
 
 
 def reload_workspace_index() -> None:
-    global WORKSPACE_INDEX, WORKSPACE_META
-    WORKSPACE_INDEX, WORKSPACE_META = load_workspace_index()
+    global _workspace_snapshot
+    _workspace_snapshot = load_workspace_index()
 
 
 def embed_query(query: str) -> Any:
@@ -126,15 +127,12 @@ def embed_query(query: str) -> Any:
     return embedding
 
 
-def build_search_results(indices: Any, scores: Any) -> list[dict[str, Any]]:
-    if WORKSPACE_META is None:
-        return []
-
+def build_search_results(indices: Any, scores: Any, metadata: list[dict[str, Any]]) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
     for idx, score in zip(indices[0], scores[0]):
         if idx == -1:
             continue
-        item = WORKSPACE_META[idx]
+        item = metadata[idx]
         results.append(
             {
                 "score": float(score),
@@ -153,16 +151,18 @@ reload_workspace_index()
 
 @app.get("/health")
 def health() -> dict[str, Any]:
+    index, metadata = _workspace_snapshot
     return {
         "status": "ok",
-        "workspace_indexed": WORKSPACE_INDEX is not None and WORKSPACE_META is not None,
+        "workspace_indexed": index is not None and metadata is not None,
         "app_root": str(APP_ROOT),
     }
 
 
 @app.post("/search")
 def search(req: QueryRequest) -> dict[str, Any]:
-    if WORKSPACE_INDEX is None or WORKSPACE_META is None:
+    index, metadata = _workspace_snapshot
+    if index is None or metadata is None:
         return {"results": [], "message": "Workspace not indexed"}
 
     query = req.query.strip()
@@ -171,12 +171,12 @@ def search(req: QueryRequest) -> dict[str, Any]:
 
     try:
         query_embedding = embed_query(query)
-        scores, indices = WORKSPACE_INDEX.search(query_embedding, min(req.top_k, SEARCH_LIMIT))
+        scores, indices = index.search(query_embedding, min(req.top_k, SEARCH_LIMIT))
     except Exception as exc:
         logger.exception("Search failed", exc_info=exc)
         return {"results": [], "error": str(exc)}
 
-    results = build_search_results(indices, scores)
+    results = build_search_results(indices, scores, metadata)
     if not results:
         return {"results": []}
 
@@ -199,12 +199,13 @@ def index_workspace(req: IndexRequest) -> dict[str, Any]:
     from backend.indexing.workspace_indexer import index_workspace as run_full_index
 
     try:
-        result = run_full_index(root_path)
+        with _index_update_lock:
+            result = run_full_index(root_path)
+            reload_workspace_index()
     except Exception as exc:
         logger.exception("Full index failed", exc_info=exc)
         return {"status": "error", "detail": str(exc)}
 
-    reload_workspace_index()
     return {"status": "success", "detail": result}
 
 
@@ -218,12 +219,13 @@ def index_file(req: FileIndexRequest) -> dict[str, Any]:
     from backend.indexing.workspace_indexer import index_single_file
 
     try:
-        result = index_single_file(file_path, root_path)
+        with _index_update_lock:
+            result = index_single_file(file_path, root_path)
+            reload_workspace_index()
     except Exception as exc:
         logger.exception("Incremental index failed", exc_info=exc)
         return {"status": "error", "detail": str(exc)}
 
-    reload_workspace_index()
     return {"status": "success", "detail": result}
 
 
@@ -237,10 +239,11 @@ def delete_file_index(req: FileIndexRequest) -> dict[str, Any]:
     from backend.indexing.workspace_indexer import delete_file_entries
 
     try:
-        result = delete_file_entries(file_path, root_path)
+        with _index_update_lock:
+            result = delete_file_entries(file_path, root_path)
+            reload_workspace_index()
     except Exception as exc:
         logger.exception("Delete index failed", exc_info=exc)
         return {"status": "error", "detail": str(exc)}
 
-    reload_workspace_index()
     return {"status": "success", "detail": result}
