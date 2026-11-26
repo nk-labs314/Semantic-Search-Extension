@@ -3,10 +3,13 @@ from __future__ import annotations
 import ast
 import hashlib
 import json
+import logging
 import os
-import shutil
+from functools import lru_cache
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from typing import Any
+from zipfile import BadZipFile
 
 import faiss
 import numpy as np
@@ -17,10 +20,14 @@ BACKEND_ROOT = Path(__file__).resolve().parents[1]
 OUTPUT_DIR = BACKEND_ROOT / "data" / "embeddings" / "workspace"
 INDEX_PATH = OUTPUT_DIR / "index.faiss"
 METADATA_PATH = OUTPUT_DIR / "metadata.json"
+EMBEDDING_CACHE_PATH = OUTPUT_DIR / "embeddings.npz"
 MODEL_PATH = BACKEND_ROOT / "assets" / "best_model.pt"
 MODEL_ASSET_DIR = BACKEND_ROOT / "assets" / "codebert-base"
 BATCH_SIZE = 16
 CODEBERT_DIM = 768
+MAX_TOKENS = 512
+# Bump when the embedding algorithm changes, including pooling or normalization.
+EMBEDDING_CACHE_VERSION = 1
 SKIP_DIRS = {
     ".venv",
     ".git",
@@ -34,6 +41,7 @@ SKIP_DIRS = {
 }
 
 _model_cache: dict[str, Any] = {}
+logger = logging.getLogger(__name__)
 
 
 def scan_python_files(root_path: str) -> list[str]:
@@ -142,7 +150,7 @@ def embed_functions(functions: list[dict[str, Any]]) -> np.ndarray:
             code_batch,
             padding=True,
             truncation=True,
-            max_length=512,
+            max_length=MAX_TOKENS,
             return_tensors="pt",
         )
         inputs = {key: value.to(device) for key, value in inputs.items()}
@@ -179,6 +187,55 @@ def save_empty_index() -> None:
     faiss.write_index(empty_index, str(INDEX_PATH))
     with METADATA_PATH.open("w", encoding="utf-8") as handle:
         json.dump([], handle)
+    try:
+        EMBEDDING_CACHE_PATH.unlink(missing_ok=True)
+    except OSError:
+        logger.warning("Could not clear embedding cache", exc_info=True)
+
+
+@lru_cache(maxsize=1)
+def embedding_signature() -> str:
+    signature = hashlib.sha256(f"{EMBEDDING_CACHE_VERSION}:{MAX_TOKENS}:{CODEBERT_DIM}".encode())
+    for path in [MODEL_PATH, *sorted(MODEL_ASSET_DIR.glob("*.json"))]:
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        signature.update(digest.digest())
+    return signature.hexdigest()
+
+
+def load_embedding_cache(signature: str) -> dict[str, np.ndarray]:
+    try:
+        with np.load(EMBEDDING_CACHE_PATH, allow_pickle=False) as cache:
+            if cache["signature"].item() != signature:
+                return {}
+            keys = cache["keys"]
+            vectors = cache["vectors"]
+            if (
+                keys.ndim != 1
+                or keys.dtype.kind != "U"
+                or vectors.shape != (len(keys), CODEBERT_DIM)
+                or vectors.dtype != np.float32
+                or not np.isfinite(vectors).all()
+            ):
+                raise ValueError("Invalid embedding cache arrays")
+            return dict(zip(keys.tolist(), vectors))
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError, KeyError, TypeError, EOFError, BadZipFile) as exc:
+        logger.warning("Ignoring unreadable embedding cache: %s", exc)
+        return {}
+
+
+def save_embedding_cache(signature: str, keys: list[str], vectors: np.ndarray) -> None:
+    with NamedTemporaryFile(dir=OUTPUT_DIR, suffix=".npz", delete=False) as handle:
+        temporary_path = Path(handle.name)
+    try:
+        np.savez(temporary_path, signature=signature, keys=keys, vectors=vectors)
+        temporary_path.replace(EMBEDDING_CACHE_PATH)
+    finally:
+        temporary_path.unlink(missing_ok=True)
 
 
 def rebuild_index_from_metadata(metadata: list[dict[str, Any]]) -> None:
@@ -186,14 +243,28 @@ def rebuild_index_from_metadata(metadata: list[dict[str, Any]]) -> None:
         save_empty_index()
         return
 
-    embeddings = embed_functions(metadata)
-    if len(embeddings) != len(metadata):
-        raise RuntimeError("Embedding count mismatch while rebuilding index")
-    if np.isnan(embeddings).any():
-        raise RuntimeError("NaN detected in embeddings")
+    signature = embedding_signature()
+    cached = load_embedding_cache(signature)
+    keys = [hashlib.sha256(item["code"].encode("utf-8")).hexdigest() for item in metadata]
+    missing = {key: item for key, item in zip(keys, metadata) if key not in cached}
+    if missing:
+        new_vectors = embed_functions(list(missing.values()))
+        if new_vectors.shape != (len(missing), CODEBERT_DIM):
+            raise RuntimeError("Embedding shape mismatch while rebuilding index")
+        if not np.isfinite(new_vectors).all():
+            raise RuntimeError("Non-finite value detected in embeddings")
+        cached.update(zip(missing, new_vectors))
 
+    embeddings = np.asarray([cached[key] for key in keys], dtype=np.float32)
     index = build_faiss_index(embeddings)
     save_index(index, metadata)
+    unique_keys = dict.fromkeys(keys)
+    try:
+        save_embedding_cache(
+            signature, list(unique_keys), np.asarray([cached[key] for key in unique_keys])
+        )
+    except OSError:
+        logger.warning("Could not save embedding cache", exc_info=True)
 
 
 def load_metadata() -> list[dict[str, Any]]:
@@ -204,9 +275,6 @@ def load_metadata() -> list[dict[str, Any]]:
 
 
 def index_workspace(root_path: str) -> dict[str, Any]:
-    if OUTPUT_DIR.exists():
-        shutil.rmtree(OUTPUT_DIR)
-
     functions = extract_all_functions(root_path)
     if not functions:
         save_empty_index()
