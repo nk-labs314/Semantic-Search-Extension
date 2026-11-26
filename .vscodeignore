@@ -11,6 +11,7 @@ backend/.venv-release/**
 backend/assets/best_model.pt
 backend/assets/codebert-base/**
 backend/data/**
+backend/tests/**
 **/__pycache__/**
 **/*.pyc
 *.vsix
