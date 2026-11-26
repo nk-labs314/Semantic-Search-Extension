@@ -50,3 +50,4 @@ The optional benchmark evaluates retrieval against the sibling `journal/journal_
 ```powershell
 backend/.venv/Scripts/python.exe -m backend.tests.benchmark_journal_mvp
 ```
+

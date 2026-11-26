@@ -120,3 +120,4 @@ def run(samples_per_query: int = 10) -> dict[str, object]:
 
 if __name__ == "__main__":
     print(json.dumps(run(), indent=2))
+

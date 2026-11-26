@@ -40,3 +40,4 @@ class RetrievalMetricTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             median_latency_ms([])
 
+

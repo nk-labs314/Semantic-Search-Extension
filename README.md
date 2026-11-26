@@ -169,3 +169,4 @@ Publish through VSCE or the Visual Studio Marketplace publisher portal. The exte
 ## License
 
 See [LICENSE.txt](LICENSE.txt).
+
